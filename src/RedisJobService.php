@@ -30,10 +30,12 @@ abstract class RedisJobService {
 	public $loopMap = [];
 	/** @var array Map of (job type => integer) */
 	public $maxRealMap = [];
-	/** @var array Map of (job type => integer) */
-	public $maxMemMap = [];
-	/** @var array String command to run jobs and return the status JSON blob */
-	public $dispatcher;
+	/** @var string Project name for use on Google Secrets Manager. */
+	public $project;
+	/** @var string URL to Special:RunJobs */
+	public $url;
+	/** @var array Map of wikis to run the job queue for */
+	public $wikis;
 
 	/**
 	 * How long can low priority jobs be run until some high priority
@@ -115,9 +117,17 @@ abstract class RedisJobService {
 		if ( !count( $this->queueSrvs ) ) {
 			throw new InvalidArgumentException( "Empty list for 'redis.queues'." );
 		}
-		$this->dispatcher = $config['dispatcher'];
-		if ( !$this->dispatcher ) {
-			throw new InvalidArgumentException( "No command provided for 'dispatcher'." );
+		$this->project = $config['project'];
+		if ( !$this->project ) {
+			throw new InvalidArgumentException( "No project name for Google Secrets Manager provided for 'project'." );
+		}
+		$this->url = $config['url'];
+		if ( !$this->url ) {
+			throw new InvalidArgumentException( "No url to Special:RunJobs provided for 'url'." );
+		}
+		$this->wikis = $config['wikis'];
+		if ( !count( $this->wikis ) ) {
+			throw new InvalidArgumentException( "Empty map for 'wikis'." );
 		}
 
 		foreach ( $config['groups'] as $name => $group ) {
@@ -163,11 +173,6 @@ abstract class RedisJobService {
 			foreach ( $config['limits']['real'] as $type => $value ) {
 				$this->maxRealMap[$type] = max( (int)$value, $minRealTime );
 			}
-		}
-
-		$this->maxMemMap['*'] = '300M';
-		if ( isset( $config['limits']['memory'] ) ) {
-			$this->maxMemMap = $config['limits']['memory'] + $this->maxMemMap;
 		}
 
 		if ( isset( $config['statsd'] ) ) {
