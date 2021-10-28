@@ -86,7 +86,8 @@ class JobRunnerPipeline {
 		}
 
 		$queue = $this->selectQueue( $loop, $prioMap, $pending );
-		if ( $queue && $this->slotCount < $maxSlots ) {
+		// Make sure this is a known wiki in the queue.
+		if ( $queue && isset($this->srvc->wikis[$queue[1]]) && $this->slotCount < $maxSlots ) {
 			// Spawn a job runner for this loop ID.
 			$highPrio = $prioMap[$loop]['high'];
 			$this->spawnRunner( $loop, $highPrio, $queue );
