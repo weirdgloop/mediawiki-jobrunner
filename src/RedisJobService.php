@@ -32,6 +32,8 @@ abstract class RedisJobService {
 	public $maxRealMap = [];
 	/** @var string Project name for use on Google Secrets Manager. */
 	public $project;
+	/** @var string|false Proxy to use for requests to Special:RunJobs */
+	public $proxy = false;
 	/** @var string URL to Special:RunJobs */
 	public $url;
 	/** @var array Map of wikis to run the job queue for */
@@ -149,6 +151,9 @@ abstract class RedisJobService {
 			$this->loopMap[] = $group;
 		}
 
+		if ( isset( $config['proxy'] ) ) {
+			$this->proxy = $config['proxy'];
+		}
 		if ( isset( $config['wrapper'] ) ) {
 			$this->wrapper = $config['wrapper'];
 		}

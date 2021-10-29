@@ -80,6 +80,9 @@
 	// Google Cloud project to use for Secrets Manager under Workload Identity on GKE.
 	"project": "project-name",
 
+	// Proxy to use to perform requests to Special:RunJob.
+	"proxy": "http://nginx",
+
 	"redis": {
 		// Ready queue trackers
 		"aggregators": [
@@ -98,7 +101,7 @@
 	"statsd": "statsd.eqiad.wmnet:8125",
 
 	// URL to Special:RunJobs on the wikis.
-	"url": "http://nginx/w/Special:RunJobs",
+	"url": "http://%(host)s/w/Special:RunJobs",
 
 	"wikis": {
 		"en_osrswiki": "oldschool.runescape.wiki",
