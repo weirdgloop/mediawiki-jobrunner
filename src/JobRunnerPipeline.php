@@ -140,7 +140,7 @@ class JobRunnerPipeline {
 	 * @param bool $highPrio
 	 * @param array $queue
 	 */
-	protected function spawnRunner( int $loop, bool $highPrio, array $queue ) : bool {
+	protected function spawnRunner( int $loop, bool $highPrio, array $queue ) {
 		$this->srvc->debug( "Spawning runner in loop $loop ($type, $db)." );
 
 		// Pick a random queue.
