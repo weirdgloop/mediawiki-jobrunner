@@ -151,6 +151,7 @@ class JobRunnerPipeline {
 		$this->srvc->debug( "Spawning runner in loop $loop ($type, $db)." );
 
 		$maxtime = $highPrio ? $this->srvc->lpMaxTime : $this->srvc->hpMaxTime;
+		$maxReal = $this->srvc->maxRealMap[$type] ?? $this->srvc->maxRealMap['*'] ?? $maxtime + 5;
 		$host = $this->srvc->wikis[$db];
 		$url = str_replace( "%(host)s", $host, $this->srvc->url );
 
@@ -184,7 +185,7 @@ class JobRunnerPipeline {
 			CURLOPT_RETURNTRANSFER => true,
 			CURLOPT_TCP_KEEPALIVE => 1,
 			CURLOPT_TCP_NODELAY => true,
-			CURLOPT_TIMEOUT => $maxtime + 5,
+			CURLOPT_TIMEOUT => $maxReal,
 			CURLOPT_URL => $url,
 		];
 		$proxy = $this->srvc->proxy;
