@@ -24,7 +24,7 @@ class JobRunnerPipeline {
 	 */
 	public function __construct( RedisJobService $service ) {
 		$this->srvc = $service;
-		$this->secretKey = $this->wglFetchSecret( 'wgSecretKey' );
+		$this->secretKey = wglFetchSecret( 'wgSecretKey' );
 
 		foreach( $this->srvc->loopMap as $loop => $info ) {
 			$this->slotCount[$loop] = 0;
