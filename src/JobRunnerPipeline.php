@@ -81,20 +81,20 @@ class JobRunnerPipeline {
 				}
 				curl_multi_remove_handle( $this->curlMultiHandle[$loop], $info['handle'] );
 				curl_close( $info['handle'] );
-				$this->slotCount[$loop]--;
+				$this->slotCount--;
 			}
 		}
 
 		$queue = $this->selectQueue( $loop, $prioMap, $pending );
 		// Make sure this is a known wiki in the queue.
-		if ( $queue && isset($this->srvc->wikis[$queue[1]]) && $this->slotCount[$loop] < $maxSlots ) {
+		if ( $queue && isset($this->srvc->wikis[$queue[1]]) && $this->slotCount < $maxSlots ) {
 			// Spawn a job runner for this loop ID.
 			$highPrio = $prioMap[$loop]['high'];
 			$this->spawnRunner( $loop, $highPrio, $queue );
 			++$new;
 		}
 
-		return [ ( $maxSlots - $this->slotCount[$loop] ), $new ];
+		return [ ( $maxSlots - $this->slotCount ), $new ];
 	}
 
 	/**
