@@ -95,11 +95,13 @@ class JobRunnerPipeline {
 						$cmd .= ' STDOUT:';
 					}
 
+					var_dump($result);
+					var_dump($error);
 					if ( strlen( $error ) > 4096 ) { // truncate long errors
 						$error = mb_substr( $error, 0, 4096 ) . '...';
 					}
-					$this->srvc->error( "Runner loop $loop process in slot $slot " .
-						"gave status '{$status['exitcode']}':\n$cmd\n\t$error" );
+					// $this->srvc->error( "Runner loop $loop process in slot $slot " .
+					// 	"gave status '{$status['exitcode']}':\n$cmd\n\t$error" );
 					$this->srvc->incrStats( 'runner-status.error' );
 				}
 				$this->closeRunner( $loop, $slot, $procSlot );
