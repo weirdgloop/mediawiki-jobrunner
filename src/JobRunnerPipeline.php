@@ -52,36 +52,31 @@ class JobRunnerPipeline {
 		curl_multi_exec( $this->curlMultiHandle[$loop], $active );
 		while ( false !== ( $info = curl_multi_info_read( $this->curlMultiHandle[$loop] ) ) ) {
 			if ( $info['msg'] === CURLMSG_DONE ) {
-				$slotData = json_decode( curl_getinfo( $info['handle'], CURLINFO_PRIVATE ), true );
-				if( $info['result'] === CURLE_OK ) {
-					$respCode = curl_getinfo( $info['handle'], CURLINFO_RESPONSE_CODE );
-					// $result will be an array if no exceptions happened.
-					$content = curl_multi_getcontent( $info['handle'] );
-					$result = json_decode( trim( $content ), true );
-					if ( is_array( $result ) ) {
-						// If this finished early, lay off of the queue for a while
-						if ( ( $cTime - $slotData['stime'] ) < $this->srvc->hpMaxTime / 2 ) {
-							unset( $pending[$slotData['type']][$slotData['db']] );
-							$this->srvc->debug( "Queue '{$slotData['db']}/{$slotData['type']}' emptied." );
-						}
-						$ok = 0; // jobs that ran OK
-						foreach ( $result['jobs'] as $status ) {
-							$ok += ( $status['status'] === 'ok' ) ? 1 : 0;
-						}
-						$failed = count( $result['jobs'] ) - $ok;
-						$this->srvc->incrStats( "pop.{$slotData['type']}.ok.{$host}", $ok );
-						$this->srvc->incrStats( "pop.{$slotData['type']}.failed.{$host}", $failed );
-					} else {
-						$error = $content;
-						// Mention any serious errors that may have occured
-						if ( strlen( $error ) > 4096 ) { // truncate long errors
-							$error = mb_substr( $error, 0, 4096 ) . '...';
-						}
-						$this->srvc->error( "Runner loop $loop process gave code '{$respCode}' ({$slotData['type']}, {$slotData['db']}):\n\t$error" );
-						$this->srvc->incrStats( 'runner-status.error' );
+				$slotData = json_decode( curl_getinfo( $info['handle'], CURLINFO_PRIVATE ) );
+				$httpCode = curl_getinfo( $info['handle'], CURLINFO_HTTP_CODE );
+				// $result will be an array if no exceptions happened.
+				$content = curl_multi_getcontent( $info['handle'] );
+				$result = json_decode( trim( $content ), true );
+				if ( is_array( $result ) ) {
+					// If this finished early, lay off of the queue for a while
+					if ( ( $cTime - $slotData['stime'] ) < $this->srvc->hpMaxTime / 2 ) {
+						unset( $pending[$slotData['type']][$slotData['db']] );
+						$this->srvc->debug( "Queue '{$slotData['db']}/{$slotData['type']}' emptied." );
 					}
+					$ok = 0; // jobs that ran OK
+					foreach ( $result['jobs'] as $status ) {
+						$ok += ( $status['status'] === 'ok' ) ? 1 : 0;
+					}
+					$failed = count( $result['jobs'] ) - $ok;
+					$this->srvc->incrStats( "pop.{$slotData['type']}.ok.{$host}", $ok );
+					$this->srvc->incrStats( "pop.{$slotData['type']}.failed.{$host}", $failed );
 				} else {
-					$this->srvc->error( "Runner loop $loop process gave status '{$info['result']}' ({$slotData['type']}, {$slotData['db']})" );
+					$error = $content;
+					// Mention any serious errors that may have occured
+					if ( strlen( $error ) > 4096 ) { // truncate long errors
+						$error = mb_substr( $error, 0, 4096 ) . '...';
+					}
+					$this->srvc->error( "Runner loop $loop process gave status '{$httpCode}' ({$slotData['type']}, {$slotData['db']}):\n\t$error" );
 					$this->srvc->incrStats( 'runner-status.error' );
 				}
 				curl_multi_remove_handle( $this->curlMultiHandle[$loop], $info['handle'] );
@@ -146,34 +141,24 @@ class JobRunnerPipeline {
 	 * @param array $queue
 	 */
 	protected function spawnRunner( int $loop, bool $highPrio, array $queue ) {
-		// Pick a random queue.
-		list( $type, $db ) = $queue;
 		$this->srvc->debug( "Spawning runner in loop $loop ($type, $db)." );
 
+		// Pick a random queue.
+		list( $type, $db ) = $queue;
 		$maxtime = $highPrio ? $this->srvc->lpMaxTime : $this->srvc->hpMaxTime;
 		$host = $this->srvc->wikis[$db];
-		$url = str_replace( "%(host)s", $host, $this->srvc->url );
+		$url = $this->srvc->url;
 
-		$params = [
-			'async' => false, // default: true
-			'maxjobs' => 0,
-			'maxtime' => $maxtime,
-			'sigexpiry' => '2147483647', // Needs to be newer than request time.
-			'stats' => true, // default: false
-			'tasks' => 'placeholder', // Unused, but required.
-			'title' => 'Special:RunJobs',
-			'type' => $type,
-		];
-
-		$postfields = http_build_query( $params, '', '&', PHP_QUERY_RFC3986 );
+		$postfields = 'async=false&maxtime=' . rawurlencode($maxtime) . '&sigexpiry=2147483647&tasks=placeholder&title=Special:RunJobs&type=' . rawurlencode($type);
 		$signature = hash_hmac( 'sha1', $postfields, $this->secretKey );
 		$postfields .= "&signature=$signature";
 
 		// Prepare the runner.
 		$ch = curl_init();
-		$opts = [
+		curl_setopt_array( $ch, [
 			CURLOPT_CONNECTTIMEOUT => 5,
 			CURLOPT_HEADER => false,
+			CURLOPT_HTTPHEADER => [ 'Host' => $host ],
 			CURLOPT_POST => true,
 			CURLOPT_POSTFIELDS => $postfields,
 			CURLOPT_PRIVATE => json_encode([
@@ -186,12 +171,7 @@ class JobRunnerPipeline {
 			CURLOPT_TCP_NODELAY => true,
 			CURLOPT_TIMEOUT => $maxtime + 5,
 			CURLOPT_URL => $url,
-		];
-		$proxy = $this->srvc->proxy;
-		if ( $proxy !== false ) {
-			$opts[CURLOPT_PROXY] = $proxy;
-		}
-		curl_setopt_array( $ch, $opts);
+		]);
 		curl_multi_add_handle( $this->curlMultiHandle[$loop], $ch );
 	}
 }
