@@ -70,15 +70,16 @@
 			"*": 3600,
 			"webVideoTranscode": 86400
 		},
-		// Special:RunJobs process time limits
+		// runJobs.php process time limits
 		"real": {
 			"*": 300,
 			"webVideoTranscode": 86400
+		},
+		// runJobs.php memory limits
+		"memory": {
+			"*": "300M"
 		}
 	},
-
-	// Google Cloud project to use for Secrets Manager under Workload Identity on GKE.
-	"project": "project-name",
 
 	"redis": {
 		// Ready queue trackers
@@ -97,14 +98,6 @@
 	// Address to send statsd metrics to
 	"statsd": "statsd.eqiad.wmnet:8125",
 
-	// URL to Special:RunJobs on the wikis.
-	"url": "http://nginx/w/Special:RunJobs",
-
-	"wikis": {
-		"en_osrswiki": "oldschool.runescape.wiki",
-		"en_rscwiki": "classic.runescape.wiki",
-		"en_rswiki": "runescape.wiki",
-		"metawiki": "meta.weirdgloop.org",
-		"pt_rswiki": "pt.runescape.wiki"
-	}
+	// Command used to launch a runner for a given job queue
+	"dispatcher": "php /srv/mediawiki/multiversion/MWScript.php runJobs.php --wiki=%(db)x --type=%(type)x --maxtime=%(maxtime)x --memory-limit=%(maxmem)x --result=json"
 }

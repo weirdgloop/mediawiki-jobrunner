@@ -1,40 +1,34 @@
 <?php
 
-use Google\Cloud\SecretManager\V1\SecretManagerServiceClient;
-
 class JobRunnerPipeline {
-	/** @var array[CurlMultiHandle] */
-	protected $curlMultiHandle = [];
-	/** @var string */
-	protected $secretKey;
-	/** @var array[int] */
-	protected $slotCount = [];
 	/** @var RedisJobService */
 	protected $srvc;
-
-	protected function wglFetchSecret( $secretName ) {
-		$client = new SecretManagerServiceClient();
-		$name = $client->secretVersionName( $this->srvc->project, 'mediawiki-' . $secretName, 'latest');
-		$response = $client->accessSecretVersion($name);
-		return $response->getPayload()->getData();
-	}
+	/** @var array (loop ID => slot ID => slot status array) */
+	protected $procMap = [];
 
 	/**
 	 * @param RedisJobService $service
 	 */
 	public function __construct( RedisJobService $service ) {
 		$this->srvc = $service;
-		$this->secretKey = wglFetchSecret( 'wgSecretKey' );
+	}
 
-		foreach( $this->srvc->loopMap as $loop => $info ) {
-			$this->slotCount[$loop] = 0;
-			$this->curlMultiHandle[$loop] = curl_multi_init();
-
-			// Maximum number of cURL connections to keep open.
-			curl_multi_setopt( $this->curlMultiHandle[$loop], CURLMOPT_MAXCONNECTS, $info['runners'] );
-			curl_multi_setopt( $this->curlMultiHandle[$loop], CURLMOPT_MAX_HOST_CONNECTIONS, $info['runners'] );
-			curl_multi_setopt( $this->curlMultiHandle[$loop], CURLMOPT_MAX_TOTAL_CONNECTIONS, $info['runners'] );
-		}
+	/**
+	 * @param string $loop
+	 * @param int $slot
+	 */
+	public function initSlot( string $loop, int $slot ) {
+		$this->procMap[$loop][$slot] = [
+			'handle'  => false,
+			'pipes'   => [],
+			'db'      => null,
+			'type'    => null,
+			'cmd'     => null,
+			'stime'   => 0,
+			'sigtime' => 0,
+			'stdout' => '',
+			'stderr' => ''
+		];
 	}
 
 	/**
@@ -44,56 +38,89 @@ class JobRunnerPipeline {
 	 * @return array
 	 */
 	public function refillSlots( int $loop, array $prioMap, array &$pending ) : array {
-		$maxSlots = $this->srvc->loopMap[$loop]['runners'];
+		$free = 0;
 		$new = 0;
 		$host = gethostname();
 		$cTime = time();
-
-		curl_multi_exec( $this->curlMultiHandle[$loop], $active );
-		while ( false !== ( $info = curl_multi_info_read( $this->curlMultiHandle[$loop] ) ) ) {
-			if ( $info['msg'] === CURLMSG_DONE ) {
-				$slotData = json_decode( curl_getinfo( $info['handle'], CURLINFO_PRIVATE ) );
-				$httpCode = curl_getinfo( $info['handle'], CURLINFO_HTTP_CODE );
-				// $result will be an array if no exceptions happened.
-				$content = curl_multi_getcontent( $info['handle'] );
-				$result = json_decode( trim( $content ), true );
-				if ( is_array( $result ) ) {
+		foreach ( $this->procMap[$loop] as $slot => &$procSlot ) {
+			$status = $procSlot['handle'] ? proc_get_status( $procSlot['handle'] ) : null;
+			if ( $status ) {
+				// Keep reading in any output (nonblocking) to avoid process lockups
+				$procSlot['stdout'] .= fread( $procSlot['pipes'][1], 65535 );
+				$procSlot['stderr'] .= fread( $procSlot['pipes'][2], 65535 );
+			}
+			if ( $status && $status['running'] ) {
+				$maxReal = isset( $this->srvc->maxRealMap[$procSlot['type']] )
+					? $this->srvc->maxRealMap[$procSlot['type']]
+					: $this->srvc->maxRealMap['*'];
+				$age = $cTime - $procSlot['stime'];
+				if ( $age >= $maxReal && !$procSlot['sigtime'] ) {
+					$cmd = $procSlot['cmd'];
+					$this->srvc->error( "Runner loop $loop process in slot $slot timed out " .
+						"[{$age}s; max: {$maxReal}s]:\n$cmd" );
+					posix_kill( $status['pid'], SIGTERM ); // non-blocking
+					$procSlot['sigtime'] = time();
+					$this->srvc->incrStats( 'runner-status.timeout' );
+				} elseif ( $age >= $maxReal && ( $cTime - $procSlot['sigtime'] ) > 5 ) {
+					$this->srvc->error( "Runner loop $loop process in slot $slot sent SIGKILL." );
+					$this->closeRunner( $loop, $slot, $procSlot, SIGKILL );
+					$this->srvc->incrStats( 'runner-status.kill' );
+				} else {
+					continue; // slot is busy
+				}
+			} elseif ( $status && !$status['running'] ) {
+				// $result will be an array if no exceptions happened
+				$result = json_decode( trim( $procSlot['stdout'] ), true );
+				if ( $status['exitcode'] == 0 && is_array( $result ) ) {
 					// If this finished early, lay off of the queue for a while
-					if ( ( $cTime - $slotData['stime'] ) < $this->srvc->hpMaxTime / 2 ) {
-						unset( $pending[$slotData['type']][$slotData['db']] );
-						$this->srvc->debug( "Queue '{$slotData['db']}/{$slotData['type']}' emptied." );
+					if ( ( $cTime - $procSlot['stime'] ) < $this->srvc->hpMaxTime/2 ) {
+						unset( $pending[$procSlot['type']][$procSlot['db']] );
+						$this->srvc->debug( "Queue '{$procSlot['db']}/{$procSlot['type']}' emptied." );
 					}
 					$ok = 0; // jobs that ran OK
 					foreach ( $result['jobs'] as $status ) {
 						$ok += ( $status['status'] === 'ok' ) ? 1 : 0;
 					}
 					$failed = count( $result['jobs'] ) - $ok;
-					$this->srvc->incrStats( "pop.{$slotData['type']}.ok.{$host}", $ok );
-					$this->srvc->incrStats( "pop.{$slotData['type']}.failed.{$host}", $failed );
+					$this->srvc->incrStats( "pop.{$procSlot['type']}.ok.{$host}", $ok );
+					$this->srvc->incrStats( "pop.{$procSlot['type']}.failed.{$host}", $failed );
 				} else {
-					$error = $content;
 					// Mention any serious errors that may have occured
+					$cmd = $procSlot['cmd'];
+					if ( $procSlot['stderr'] ) {
+						$error = $procSlot['stderr'];
+						$cmd .= ' STDERR:';
+					} else {
+						$error = $procSlot['stdout'];
+						$cmd .= ' STDOUT:';
+					}
+
 					if ( strlen( $error ) > 4096 ) { // truncate long errors
 						$error = mb_substr( $error, 0, 4096 ) . '...';
 					}
-					$this->srvc->error( "Runner loop $loop process gave status '{$httpCode}' ({$slotData['type']}, {$slotData['db']}):\n\t$error" );
+					$this->srvc->error( "Runner loop $loop process in slot $slot " .
+						"gave status '{$status['exitcode']}':\n$cmd\n\t$error" );
 					$this->srvc->incrStats( 'runner-status.error' );
 				}
-				curl_multi_remove_handle( $this->curlMultiHandle[$loop], $info['handle'] );
-				curl_close( $info['handle'] );
-				$this->slotCount--;
+				$this->closeRunner( $loop, $slot, $procSlot );
+			} elseif ( !$status && $procSlot['handle'] ) {
+				$this->srvc->error( "Runner loop $loop process in slot $slot gave no status." );
+				$this->closeRunner( $loop, $slot, $procSlot );
+				$this->srvc->incrStats( 'runner-status.none' );
 			}
-		}
-
-		$queue = $this->selectQueue( $loop, $prioMap, $pending );
-		if ( $queue && $this->slotCount < $maxSlots ) {
-			// Spawn a job runner for this loop ID.
+			++$free;
+			$queue = $this->selectQueue( $loop, $prioMap, $pending );
+			if ( !$queue ) {
+				break;
+			}
+			// Spawn a job runner for this loop ID
 			$highPrio = $prioMap[$loop]['high'];
-			$this->spawnRunner( $loop, $highPrio, $queue );
+			$this->spawnRunner( $loop, $slot, $highPrio, $queue, $procSlot );
 			++$new;
 		}
+		unset( $procSlot );
 
-		return [ ( $maxSlots - $this->slotCount ), $new ];
+		return [ $free, $new ];
 	}
 
 	/**
@@ -136,41 +163,122 @@ class JobRunnerPipeline {
 
 	/**
 	 * @param integer $loop
+	 * @param integer $slot
 	 * @param bool $highPrio
 	 * @param array $queue
+	 * @param array $procSlot
+	 * @return bool
 	 */
-	protected function spawnRunner( int $loop, bool $highPrio, array $queue ) : bool {
-		$this->srvc->debug( "Spawning runner in loop $loop ($type, $db)." );
-
-		// Pick a random queue.
+	protected function spawnRunner( int $loop, int $slot, bool $highPrio, array $queue, array &$procSlot ) : bool {
+		// Pick a random queue
 		list( $type, $db ) = $queue;
 		$maxtime = $highPrio ? $this->srvc->lpMaxTime : $this->srvc->hpMaxTime;
-		$host = $this->srvc->wikis[$db];
-		$url = $this->srvc->url;
+		$maxmem = isset( $this->srvc->maxMemMap[$type] )
+			? $this->srvc->maxMemMap[$type]
+			: $this->srvc->maxMemMap['*'];
 
-		$postfields = 'async=false&maxtime=' . rawurlencode($maxtime) . '&sigexpiry=2147483647&tasks=placeholder&title=Special:RunJobs&type=' . rawurlencode($type);
-		$signature = hash_hmac( 'sha1', $postfields, $this->secretKey );
-		$postfields .= "&signature=$signature";
+		// Make sure the runner is launched with various time/memory limits.
+		// Nice the process so things like ssh and deployment scripts are fine.
+		$what = $with = [];
+		foreach ( compact( 'db', 'type', 'maxtime', 'maxmem' ) as $k => $v ) {
+			$what[] = "%($k)u";
+			$with[] = rawurlencode( $v );
+			$what[] = "%($k)x";
+			$with[] = escapeshellarg( $v );
+		}
+		// The dispatcher might be runJobs.php, curl, or wget
+		$cmd = str_replace( $what, $with, $this->srvc->dispatcher );
 
-		// Prepare the runner.
-		$ch = curl_init();
-		curl_setopt_array( $ch, [
-			CURLOPT_CONNECTTIMEOUT => 5,
-			CURLOPT_HEADER => false,
-			CURLOPT_HTTPHEADER => [ 'Host' => $host ],
-			CURLOPT_POST => true,
-			CURLOPT_POSTFIELDS => $postfields,
-			CURLOPT_PRIVATE => json_encode([
-				'db' => $db,
-				'stime' => time(),
-				'type' => $type,
-			]),
-			CURLOPT_RETURNTRANSFER => true,
-			CURLOPT_TCP_KEEPALIVE => 1,
-			CURLOPT_TCP_NODELAY => true,
-			CURLOPT_TIMEOUT => $maxtime + 5,
-			CURLOPT_URL => $url,
-		]);
-		curl_multi_add_handle( $this->curlMultiHandle[$loop], $ch );
+		$descriptors = [
+			0 => [ "pipe", "r" ], // stdin (child)
+			1 => [ "pipe", "w" ], // stdout (child)
+			2 => [ "pipe", "w" ] // stderr (child)
+		];
+
+		$this->srvc->debug( "Spawning runner in loop $loop at slot $slot ($type, $db):\n\t$cmd." );
+
+		// Start the runner in the background
+		$procSlot['handle'] = proc_open( $cmd, $descriptors, $procSlot['pipes'] );
+		if ( $procSlot['handle'] ) {
+			// Make sure socket reads don't wait for data
+			stream_set_blocking( $procSlot['pipes'][1], 0 );
+			stream_set_blocking( $procSlot['pipes'][2], 0 );
+			// Set a timeout so stream_get_contents() won't block for sanity
+			stream_set_timeout( $procSlot['pipes'][1], 1 );
+			stream_set_timeout( $procSlot['pipes'][2], 1 );
+			// Close the unused STDIN pipe
+			fclose( $procSlot['pipes'][0] );
+			unset( $procSlot['pipes'][0] ); // unused
+		}
+
+		$procSlot['db'] = $db;
+		$procSlot['type'] = $type;
+		$procSlot['cmd'] = $cmd;
+		$procSlot['stime'] = time();
+		$procSlot['sigtime'] = 0;
+		$procSlot['stdout'] = '';
+		$procSlot['stderr'] = '';
+
+		if ( $procSlot['handle'] ) {
+			return true;
+		} else {
+			$this->srvc->error( "Could not spawn process in loop $loop: $cmd" );
+			$this->srvc->incrStats( 'runner-status.error' );
+			return false;
+		}
+	}
+
+	/**
+	 * @param integer $loop
+	 * @param integer $slot
+	 * @param array $procSlot
+	 * @param int|null $signal
+	 */
+	protected function closeRunner( int $loop, int $slot, array &$procSlot, int $signal = null ) {
+		if ( $procSlot['pipes'] ) {
+			if ( $procSlot['pipes'][1] !== false ) {
+				fclose( $procSlot['pipes'][1] );
+				$procSlot['pipes'][1] = false;
+			}
+			if ( $procSlot['pipes'][2] !== false ) {
+				fclose( $procSlot['pipes'][2] );
+				$procSlot['pipes'][2] = false;
+			}
+		}
+		if ( $procSlot['handle'] ) {
+			$this->srvc->debug( "Closing process in loop $loop at slot $slot." );
+			if ( $signal !== null ) {
+				// Tell the process to close with a signal
+				proc_terminate( $procSlot['handle'], $signal );
+			} else {
+				// Wait for the process to finish on its own
+				proc_close( $procSlot['handle'] );
+			}
+		}
+		$procSlot['handle'] = false;
+		$procSlot['db'] = null;
+		$procSlot['type'] = null;
+		$procSlot['stime'] = 0;
+		$procSlot['sigtime'] = 0;
+		$procSlot['cmd'] = null;
+		$procSlot['stdout'] = '';
+		$procSlot['stderr'] = '';
+	}
+
+	public function terminateSlots() {
+		foreach ( $this->procMap as $procSlots ) {
+			foreach ( $procSlots as $procSlot ) {
+				if ( !$procSlot['handle'] ) {
+					continue;
+				}
+				fclose( $procSlot['pipes'][1] );
+				fclose( $procSlot['pipes'][2] );
+				$status = proc_get_status( $procSlot['handle'] );
+				print "Sending SIGTERM to {$status['pid']}.\n";
+				proc_terminate( $procSlot['handle'] );
+			}
+			unset( $procSlot );
+		}
+		unset( $procSlots );
 	}
 }

@@ -14,14 +14,12 @@
 
 	"require": {
 		"php": ">=7.2.0",
-		"ext-curl": "*",
 		"ext-pcntl": "*",
 		"ext-redis": "*",
 		"ext-json": "*",
 		"ext-posix": "*",
 		"ext-mbstring": "*",
-		"ext-sockets": "*",
-		"google/cloud-secret-manager": "^1.7"
+		"ext-sockets": "*"
     },
 	"require-dev": {
 		"jakub-onderka/php-parallel-lint": "0.9.2",
