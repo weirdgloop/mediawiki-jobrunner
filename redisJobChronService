@@ -29,6 +29,7 @@ class RedisJobChronService extends RedisJobService {
 		};
 		$ok = pcntl_signal( SIGHUP, $handlerFunc )
 			&& pcntl_signal( SIGINT, $handlerFunc )
+			&& pcntl_signal( SIGSTOP, $handlerFunc )
 			&& pcntl_signal( SIGTERM, $handlerFunc );
 		if ( !$ok ) {
 			throw new Exception( 'Could not install signal handlers.' );
