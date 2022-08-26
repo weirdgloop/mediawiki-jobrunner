@@ -308,11 +308,11 @@ class PeriodicScriptParamsIterator implements Iterator {
 		$this->queueIds = $queueIds;
 	}
 
-	function rewind() {
+	function rewind(): void {
 		reset( $this->queueIds );
 	}
 
-	function current() {
+	function current(): mixed {
 		$queueId = current( $this->queueIds );
 		if ( $queueId === false ) {
 			return false;
@@ -342,15 +342,15 @@ class PeriodicScriptParamsIterator implements Iterator {
 		];
 	}
 
-	function key() {
+	function key(): mixed {
 		return key( $this->queueIds );
 	}
 
-	function next() {
+	function next(): void {
 		next( $this->queueIds );
 	}
 
-	function valid() : int {
+	function valid(): bool {
 		return key( $this->queueIds ) !== null;
 	}
 
