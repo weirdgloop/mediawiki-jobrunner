@@ -71,7 +71,7 @@ class JobRunnerPipeline {
 			} elseif ( $status && !$status['running'] ) {
 				// $result will be an array if no exceptions happened
 				$result = json_decode( trim( $procSlot['stdout'] ), true );
-				if ( $status['exitcode'] == 0 && is_array( $result ) ) {
+				if ( (int)$status['exitcode'] == 0 && is_array( $result ) ) {
 					// If this finished early, lay off of the queue for a while
 					if ( ( $cTime - $procSlot['stime'] ) < $this->srvc->hpMaxTime/2 ) {
 						unset( $pending[$procSlot['type']][$procSlot['db']] );
