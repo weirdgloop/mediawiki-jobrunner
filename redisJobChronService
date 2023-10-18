@@ -312,6 +312,7 @@ class PeriodicScriptParamsIterator implements Iterator {
 		reset( $this->queueIds );
 	}
 
+	#[ReturnTypeWillChange]
 	function current() {
 		$queueId = current( $this->queueIds );
 		if ( $queueId === false ) {
@@ -345,6 +346,7 @@ class PeriodicScriptParamsIterator implements Iterator {
 		];
 	}
 
+	#[ReturnTypeWillChange]
 	function key() {
 		return key( $this->queueIds );
 	}
