@@ -9,11 +9,11 @@
 		}
 	],
 	"support": {
-		"issues": "https://phabricator.wikimedia.org/tag/mediawiki-jobrunner/"
+		"issues": "https://phabricator.wikimedia.org/tag/wmf-jobqueue/"
 	},
 
 	"require": {
-		"php": ">=7.2.0",
+		"php": ">=7.4.3",
 		"ext-pcntl": "*",
 		"ext-redis": "*",
 		"ext-json": "*",
