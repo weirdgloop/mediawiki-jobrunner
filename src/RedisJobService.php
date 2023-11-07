@@ -21,7 +21,6 @@ abstract class RedisJobService {
 	protected $aggrSrvs = [];
 	/** @var string Redis password */
 	protected $password;
-	protected $wrapper;
 	/** @var string IP address or hostname */
 	protected $statsdHost;
 	/** @var array statsd packets pending sending */
