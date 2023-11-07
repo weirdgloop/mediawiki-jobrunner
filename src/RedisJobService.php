@@ -275,15 +275,11 @@ abstract class RedisJobService {
 			$conn->auth( $this->password );
 		}
 
-		if ( $conn ) {
-			$conn->setOption( Redis::OPT_READ_TIMEOUT, 5 );
-			$conn->setOption( Redis::OPT_SERIALIZER, Redis::SERIALIZER_NONE );
-			$this->conns[$server] = $conn;
+		$conn->setOption( Redis::OPT_READ_TIMEOUT, 5 );
+		$conn->setOption( Redis::OPT_SERIALIZER, Redis::SERIALIZER_NONE );
+		$this->conns[$server] = $conn;
 
-			return $conn;
-		} else {
-			return false;
-		}
+		return $conn;
 	}
 
 	/**
